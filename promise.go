@@ -140,7 +140,7 @@ func (p *Promise[T]) Await() (T, error) {
 	case result := <-doneChan:
 		return result, nil
 	case err := <-errChan:
-		return ZeroValue[T](), err
+		return zeroValue[T](), err
 	}
 }
 
@@ -240,14 +240,14 @@ func Race[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 
 		select {
 		case err := <-errChan:
-			return ZeroValue[T](), err
+			return zeroValue[T](), err
 		case result := <-doneChan:
 			return result, nil
 		case <-ctx.Done():
 			if err := ctx.Err(); err != nil {
-				return ZeroValue[T](), err
+				return zeroValue[T](), err
 			} else {
-				return ZeroValue[T](), fmt.Errorf("context canceled")
+				return zeroValue[T](), fmt.Errorf("context canceled")
 			}
 		}
 	})
@@ -307,9 +307,9 @@ func Any[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 			select {
 			case <-ctx.Done():
 				if err := ctx.Err(); err != nil {
-					return ZeroValue[T](), err
+					return zeroValue[T](), err
 				} else {
-					return ZeroValue[T](), fmt.Errorf("context canceled")
+					return zeroValue[T](), fmt.Errorf("context canceled")
 				}
 			case err := <-errChan:
 				errs = append(errs, err)
@@ -322,7 +322,7 @@ func Any[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 			return errs[i].index < errs[j].index
 		})
 
-		return ZeroValue[T](), &AggregateError{
+		return zeroValue[T](), &AggregateError{
 			Errors: mapWith[promiseError, error](errs, func(pErr promiseError) error {
 				return pErr.err
 			}),
@@ -337,6 +337,6 @@ func mapWith[T, U any](in []T, f func(t T) U) (out []U) {
 	return
 }
 
-func ZeroValue[T any]() T {
+func zeroValue[T any]() T {
 	return struct { t T } {}.t
 }
