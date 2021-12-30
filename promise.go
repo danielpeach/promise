@@ -8,20 +8,20 @@ import (
 )
 
 type Promise[T any] struct {
-	f func (ctx context.Context) (*T, error)
-	value *T
-	err error
-	resolved bool
-	rejected bool
-	cancel context.CancelFunc
+	f         func(ctx context.Context) (*T, error)
+	value     *T
+	err       error
+	resolved  bool
+	rejected  bool
+	cancel    context.CancelFunc
 	callbacks []func(ctx context.Context, value *T, err error)
-	mu *sync.Mutex
+	mu        *sync.Mutex
 }
 
-func New[T any](ctx context.Context, f func (ctx context.Context) (*T, error)) *Promise[T] {
+func New[T any](ctx context.Context, f func(ctx context.Context) (*T, error)) *Promise[T] {
 	p := &Promise[T]{
 		mu: &sync.Mutex{},
-		f: f,
+		f:  f,
 	}
 
 	launch(ctx, p)
@@ -30,7 +30,10 @@ func New[T any](ctx context.Context, f func (ctx context.Context) (*T, error)) *
 
 func launch[T any](ctx context.Context, p *Promise[T]) {
 	ctx, cancel := context.WithCancel(ctx)
+
+	p.mu.Lock()
 	p.cancel = cancel
+	p.mu.Unlock()
 
 	go func(ctx context.Context) {
 		doneChan := make(chan *T)
@@ -47,18 +50,24 @@ func launch[T any](ctx context.Context, p *Promise[T]) {
 
 		select {
 		case <-ctx.Done():
+			p.mu.Lock()
 			if err := ctx.Err(); err != nil {
 				p.err = err
 			} else {
-				p.err = fmt.Errorf("context cancelled")
+				p.err = fmt.Errorf("context canceled")
 			}
 			p.rejected = true
-		case err := <- errChan:
+			p.mu.Unlock()
+		case err := <-errChan:
+			p.mu.Lock()
 			p.err = err
 			p.rejected = true
-		case result := <- doneChan:
+			p.mu.Unlock()
+		case result := <-doneChan:
+			p.mu.Lock()
 			p.value = result
 			p.resolved = true
+			p.mu.Unlock()
 		}
 
 		p.executeCallbacks(ctx)
@@ -70,19 +79,17 @@ func (p *Promise[T]) executeCallbacks(ctx context.Context) {
 	defer p.mu.Unlock()
 
 	for _, cb := range p.callbacks {
-		cb(ctx, p.value, p.err)
+		go cb(ctx, p.value, p.err)
 	}
 }
 
-func (p *Promise[T]) settled() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.resolved || p.rejected
-}
-
 func (p *Promise[T]) Await() (*T, error) {
-
 	p.mu.Lock()
+	if p.resolved || p.rejected {
+		defer p.mu.Unlock()
+		return p.value, p.err
+	}
+
 	doneChan := make(chan *T)
 	errChan := make(chan error)
 
@@ -96,14 +103,14 @@ func (p *Promise[T]) Await() (*T, error) {
 	p.mu.Unlock()
 
 	select {
-	case result := <- doneChan:
+	case result := <-doneChan:
 		return result, nil
-	case err := <- errChan:
+	case err := <-errChan:
 		return nil, err
 	}
 }
 
-func Then[T, V any](promise *Promise[T], f func (ctx context.Context, value *T, err error) (*V, error)) *Promise[V] {
+func Then[T, V any](promise *Promise[T], f func(ctx context.Context, value *T, err error) (*V, error)) *Promise[V] {
 	next := &Promise[V]{
 		mu: &sync.Mutex{},
 	}
@@ -128,45 +135,49 @@ type promiseComplete[T any] struct {
 	index int
 }
 
-func All[T any](promises... *Promise[T]) ([]T, error) {
-	var results []promiseComplete[T]
+func All[T any](promises ...*Promise[T]) *Promise[[]T] {
+	return New(context.Background(), func(ctx context.Context) (*[]T, error) {
+		var results []promiseComplete[T]
 
-	errChan := make(chan error)
-	doneChan := make(chan promiseComplete[T])
+		errChan := make(chan error)
+		doneChan := make(chan promiseComplete[T])
 
-	for index, promise := range promises {
-		go func(i int, p *Promise[T]) {
-			value, err := p.Await()
-			if err != nil {
-				errChan <- err
-				return
-			}
-			doneChan <- promiseComplete[T]{
-				value: *value,
-				index: i,
-			}
-		}(index, promise)
-	}
-
-	for len(results) != len(promises) {
-		select {
-		case err := <- errChan:
-			return nil, err
-		case result := <- doneChan:
-			results = append(results, result)
+		for index, promise := range promises {
+			go func(i int, p *Promise[T]) {
+				value, err := p.Await()
+				if err != nil {
+					errChan <- err
+					return
+				}
+				doneChan <- promiseComplete[T]{
+					value: *value,
+					index: i,
+				}
+			}(index, promise)
 		}
-	}
 
-	sort.SliceStable(results, func(i, j int) bool {
-		return results[i].index < results[j].index
+		for len(results) != len(promises) {
+			select {
+			case err := <-errChan:
+				return nil, err
+			case result := <-doneChan:
+				results = append(results, result)
+			}
+		}
+
+		sort.SliceStable(results, func(i, j int) bool {
+			return results[i].index < results[j].index
+		})
+
+		mapped := collect[promiseComplete[T], T](results, func(result promiseComplete[T]) T {
+			return result.value
+		})
+
+		return &mapped, nil
 	})
-
-	return collect[promiseComplete[T], T](results, func(result promiseComplete[T]) T {
-		return result.value
-	}), nil
 }
 
-func collect[T, U any](in []T, f func (t T) U) (out []U) {
+func collect[T, U any](in []T, f func(t T) U) (out []U) {
 	for _, t := range in {
 		out = append(out, f(t))
 	}
