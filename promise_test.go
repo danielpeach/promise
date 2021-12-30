@@ -56,6 +56,19 @@ func TestAwaitTwice(t *testing.T) {
 	}
 }
 
+type testStruct struct {
+	value int
+}
+
+func TestErrorWithStruct(t *testing.T) {
+	promise := New[testStruct](context.Background(), func(ctx context.Context) (testStruct, error) {
+		return testStruct{value: 1000}, fmt.Errorf("whoops")
+	})
+	value, err := promise.Await()
+	assert.Equal(t, "whoops", err.Error())
+	assert.Equal(t, 0, value.value)
+}
+
 func TestParallelAwait(t *testing.T) {
 	promise := New[int](context.Background(), func(ctx context.Context) (int, error) {
 		time.Sleep(1 * time.Millisecond)
