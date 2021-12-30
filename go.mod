@@ -1,4 +1,4 @@
-module promise
+module github.com/danielpeach/promise
 
 go 1.18
 
