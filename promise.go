@@ -14,27 +14,48 @@ type Promise[T any] struct {
 	resolved  bool
 	rejected  bool
 	cancel    context.CancelFunc
+	ctx       context.Context
 	callbacks []func(ctx context.Context, value *T, err error)
 	mu        *sync.Mutex
 }
 
 func New[T any](ctx context.Context, f func(ctx context.Context) (*T, error)) *Promise[T] {
+	ctx, cancel := context.WithCancel(ctx)
 	p := &Promise[T]{
 		mu: &sync.Mutex{},
 		f:  f,
+		ctx: ctx,
+		cancel: cancel,
 	}
 
-	launch(ctx, p)
+	launch(p)
 	return p
 }
 
-func launch[T any](ctx context.Context, p *Promise[T]) {
-	ctx, cancel := context.WithCancel(ctx)
+func Resolve[T any](value T) *Promise[T] {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Promise[T]{
+		resolved: true,
+		value: &value,
+		mu: &sync.Mutex{},
+		ctx: ctx,
+		cancel: cancel,
+	}
+}
 
-	p.mu.Lock()
-	p.cancel = cancel
-	p.mu.Unlock()
+func Reject[T any](err error) *Promise[T] {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return &Promise[T]{
+		rejected: true,
+		err: err,
+		mu: &sync.Mutex{},
+		ctx: ctx,
+		cancel: cancel,
+	}
+}
 
+func launch[T any](p *Promise[T]) {
 	go func(ctx context.Context) {
 		doneChan := make(chan *T)
 		errChan := make(chan error)
@@ -71,7 +92,7 @@ func launch[T any](ctx context.Context, p *Promise[T]) {
 		}
 
 		p.executeCallbacks(ctx)
-	}(ctx)
+	}(p.ctx)
 }
 
 func (p *Promise[T]) executeCallbacks(ctx context.Context) {
@@ -111,23 +132,10 @@ func (p *Promise[T]) Await() (*T, error) {
 }
 
 func Then[T, V any](promise *Promise[T], f func(ctx context.Context, value *T, err error) (*V, error)) *Promise[V] {
-	next := &Promise[V]{
-		mu: &sync.Mutex{},
-	}
-
-	promise.mu.Lock()
-	promise.callbacks = append(promise.callbacks, func(ctx context.Context, value *T, err error) {
-		next.f = func(ctx context.Context) (*V, error) {
-			if err != nil {
-				return f(ctx, nil, err)
-			}
-			return f(ctx, value, nil)
-		}
-		launch(ctx, next)
+	return New[V](promise.ctx, func(ctx context.Context) (*V, error) {
+		value, err := promise.Await()
+		return f(ctx, value, err)
 	})
-	promise.mu.Unlock()
-
-	return next
 }
 
 type promiseComplete[T any] struct {
@@ -135,8 +143,8 @@ type promiseComplete[T any] struct {
 	index int
 }
 
-func All[T any](promises ...*Promise[T]) *Promise[[]T] {
-	return New(context.Background(), func(ctx context.Context) (*[]T, error) {
+func All[T any](ctx context.Context, promises ...*Promise[T]) *Promise[[]T] {
+	return New(ctx, func(ctx context.Context) (*[]T, error) {
 		var results []promiseComplete[T]
 
 		errChan := make(chan error)
@@ -162,6 +170,12 @@ func All[T any](promises ...*Promise[T]) *Promise[[]T] {
 				return nil, err
 			case result := <-doneChan:
 				results = append(results, result)
+			case <- ctx.Done():
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				} else {
+					return nil, fmt.Errorf("context canceled")
+				}
 			}
 		}
 
@@ -169,7 +183,7 @@ func All[T any](promises ...*Promise[T]) *Promise[[]T] {
 			return results[i].index < results[j].index
 		})
 
-		mapped := collect[promiseComplete[T], T](results, func(result promiseComplete[T]) T {
+		mapped := mapWith[promiseComplete[T], T](results, func(result promiseComplete[T]) T {
 			return result.value
 		})
 
@@ -177,7 +191,48 @@ func All[T any](promises ...*Promise[T]) *Promise[[]T] {
 	})
 }
 
-func collect[T, U any](in []T, f func(t T) U) (out []U) {
+func Race[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
+	return New(ctx, func(ctx context.Context) (*T, error) {
+		errChan := make(chan error)
+		doneChan := make(chan *T)
+
+		defer func() {
+			for _, promise := range promises {
+				promise.mu.Lock()
+				if promise.cancel != nil {
+					promise.cancel()
+				}
+				promise.mu.Unlock()
+			}
+		}()
+
+		for _, promise := range promises {
+			go func (p *Promise[T]) {
+				value, err := p.Await()
+				if err != nil {
+					errChan <- err
+					return
+				}
+				doneChan <- value
+			}(promise)
+		}
+
+		select {
+		case err := <-errChan:
+			return nil, err
+		case result := <-doneChan:
+			return result, nil
+		case <- ctx.Done():
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			} else {
+				return nil, fmt.Errorf("context canceled")
+			}
+		}
+	})
+}
+
+func mapWith[T, U any](in []T, f func(t T) U) (out []U) {
 	for _, t := range in {
 		out = append(out, f(t))
 	}
