@@ -9,18 +9,18 @@ import (
 )
 
 type Promise[T any] struct {
-	f         func(ctx context.Context) (*T, error)
-	value     *T
+	f         func(ctx context.Context) (T, error)
+	value     T
 	err       error
 	resolved  bool
 	rejected  bool
 	cancel    context.CancelFunc
 	ctx       context.Context
-	callbacks []func(ctx context.Context, value *T, err error)
+	callbacks []func(ctx context.Context, value T, err error)
 	mu        *sync.Mutex
 }
 
-func New[T any](ctx context.Context, f func(ctx context.Context) (*T, error)) *Promise[T] {
+func New[T any](ctx context.Context, f func(ctx context.Context) (T, error)) *Promise[T] {
 	ctx, cancel := context.WithCancel(ctx)
 	p := &Promise[T]{
 		mu:     &sync.Mutex{},
@@ -37,7 +37,7 @@ func Resolve[T any](value T) *Promise[T] {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Promise[T]{
 		resolved: true,
-		value:    &value,
+		value:    value,
 		mu:       &sync.Mutex{},
 		ctx:      ctx,
 		cancel:   cancel,
@@ -58,7 +58,7 @@ func Reject[T any](err error) *Promise[T] {
 
 func launch[T any](p *Promise[T]) {
 	go func(ctx context.Context) {
-		doneChan := make(chan *T)
+		doneChan := make(chan T)
 		errChan := make(chan error)
 
 		go func(ctx context.Context) {
@@ -105,17 +105,17 @@ func (p *Promise[T]) executeCallbacks(ctx context.Context) {
 	}
 }
 
-func (p *Promise[T]) Await() (*T, error) {
+func (p *Promise[T]) Await() (T, error) {
 	p.mu.Lock()
 	if p.resolved || p.rejected {
 		defer p.mu.Unlock()
 		return p.value, p.err
 	}
 
-	doneChan := make(chan *T)
+	doneChan := make(chan T)
 	errChan := make(chan error)
 
-	p.callbacks = append(p.callbacks, func(ctx context.Context, value *T, err error) {
+	p.callbacks = append(p.callbacks, func(ctx context.Context, value T, err error) {
 		if err != nil {
 			errChan <- err
 			return
@@ -128,12 +128,12 @@ func (p *Promise[T]) Await() (*T, error) {
 	case result := <-doneChan:
 		return result, nil
 	case err := <-errChan:
-		return nil, err
+		return ZeroValue[T](), err
 	}
 }
 
-func Then[T, V any](promise *Promise[T], f func(ctx context.Context, value *T, err error) (*V, error)) *Promise[V] {
-	return New[V](promise.ctx, func(ctx context.Context) (*V, error) {
+func Then[T, V any](promise *Promise[T], f func(ctx context.Context, value T, err error) (V, error)) *Promise[V] {
+	return New[V](promise.ctx, func(ctx context.Context) (V, error) {
 		value, err := promise.Await()
 		return f(ctx, value, err)
 	})
@@ -145,7 +145,7 @@ type promiseComplete[T any] struct {
 }
 
 func All[T any](ctx context.Context, promises ...*Promise[T]) *Promise[[]T] {
-	return New(ctx, func(ctx context.Context) (*[]T, error) {
+	return New(ctx, func(ctx context.Context) ([]T, error) {
 		var results []promiseComplete[T]
 
 		errChan := make(chan error)
@@ -159,7 +159,7 @@ func All[T any](ctx context.Context, promises ...*Promise[T]) *Promise[[]T] {
 					return
 				}
 				doneChan <- promiseComplete[T]{
-					value: *value,
+					value: value,
 					index: i,
 				}
 			}(index, promise)
@@ -184,18 +184,16 @@ func All[T any](ctx context.Context, promises ...*Promise[T]) *Promise[[]T] {
 			return results[i].index < results[j].index
 		})
 
-		mapped := mapWith[promiseComplete[T], T](results, func(result promiseComplete[T]) T {
+		return mapWith[promiseComplete[T], T](results, func(result promiseComplete[T]) T {
 			return result.value
-		})
-
-		return &mapped, nil
+		}), nil
 	})
 }
 
 func Race[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
-	return New(ctx, func(ctx context.Context) (*T, error) {
+	return New(ctx, func(ctx context.Context) (T, error) {
 		errChan := make(chan error)
-		doneChan := make(chan *T)
+		doneChan := make(chan T)
 
 		defer func() {
 			for _, promise := range promises {
@@ -220,14 +218,14 @@ func Race[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 
 		select {
 		case err := <-errChan:
-			return nil, err
+			return ZeroValue[T](), err
 		case result := <-doneChan:
 			return result, nil
 		case <-ctx.Done():
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return ZeroValue[T](), err
 			} else {
-				return nil, fmt.Errorf("context canceled")
+				return ZeroValue[T](), fmt.Errorf("context canceled")
 			}
 		}
 	})
@@ -249,11 +247,11 @@ type promiseError struct {
 }
 
 func Any[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
-	return New(ctx, func(ctx context.Context) (*T, error) {
+	return New(ctx, func(ctx context.Context) (T, error) {
 		var errs []promiseError
 
 		errChan := make(chan promiseError)
-		doneChan := make(chan *T)
+		doneChan := make(chan T)
 
 		defer func() {
 			for _, promise := range promises {
@@ -283,9 +281,9 @@ func Any[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 			select {
 			case <-ctx.Done():
 				if err := ctx.Err(); err != nil {
-					return nil, err
+					return ZeroValue[T](), err
 				} else {
-					return nil, fmt.Errorf("context canceled")
+					return ZeroValue[T](), fmt.Errorf("context canceled")
 				}
 			case err := <-errChan:
 				errs = append(errs, err)
@@ -298,7 +296,7 @@ func Any[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 			return errs[i].index < errs[j].index
 		})
 
-		return nil, &AggregateError{
+		return ZeroValue[T](), &AggregateError{
 			Errors: mapWith[promiseError, error](errs, func(pErr promiseError) error {
 				return pErr.err
 			}),
@@ -311,4 +309,8 @@ func mapWith[T, U any](in []T, f func(t T) U) (out []U) {
 		out = append(out, f(t))
 	}
 	return
+}
+
+func ZeroValue[T any]() T {
+	return struct { t T } {}.t
 }

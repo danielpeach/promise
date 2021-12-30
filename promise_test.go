@@ -12,29 +12,27 @@ import (
 )
 
 func TestAwaitSuccess(t *testing.T) {
-	promise := New[int](context.Background(), func(ctx context.Context) (*int, error) {
+	promise := New[int](context.Background(), func(ctx context.Context) (int, error) {
 		time.Sleep(1 * time.Millisecond)
-		ret := 100
-		return &ret, nil
+		return 100, nil
 	})
 
 	value, err := promise.Await()
 	assert.NoError(t, err)
-	assert.Equal(t, 100, *value)
+	assert.Equal(t, 100, value)
 }
 
 func TestAwaitTwice(t *testing.T) {
-	promise := New[int](context.Background(), func(ctx context.Context) (*int, error) {
+	promise := New[int](context.Background(), func(ctx context.Context) (int, error) {
 		time.Sleep(30 * time.Millisecond)
-		ret := 100
-		return &ret, nil
+		return 100, nil
 	})
 
 	value, err := promise.Await()
 	assert.NoError(t, err)
-	assert.Equal(t, 100, *value)
+	assert.Equal(t, 100, value)
 
-	doneChan := make(chan *int)
+	doneChan := make(chan int)
 	errChan := make(chan error)
 	timer := time.NewTimer(10 * time.Millisecond)
 	defer timer.Stop()
@@ -52,17 +50,16 @@ func TestAwaitTwice(t *testing.T) {
 	case <-timer.C:
 		assert.Fail(t, "test timed out")
 	case <-doneChan:
-		assert.Equal(t, 100, *value)
+		assert.Equal(t, 100, value)
 	case <-errChan:
 		assert.NoError(t, err)
 	}
 }
 
 func TestParallelAwait(t *testing.T) {
-	promise := New[int](context.Background(), func(ctx context.Context) (*int, error) {
+	promise := New[int](context.Background(), func(ctx context.Context) (int, error) {
 		time.Sleep(1 * time.Millisecond)
-		ret := 100
-		return &ret, nil
+		return 100, nil
 	})
 
 	var wg sync.WaitGroup
@@ -71,7 +68,7 @@ func TestParallelAwait(t *testing.T) {
 	go func() {
 		value, err := promise.Await()
 		assert.NoError(t, err)
-		assert.Equal(t, 100, *value)
+		assert.Equal(t, 100, value)
 		wg.Done()
 	}()
 
@@ -79,7 +76,7 @@ func TestParallelAwait(t *testing.T) {
 	go func() {
 		value, err := promise.Await()
 		assert.NoError(t, err)
-		assert.Equal(t, 100, *value)
+		assert.Equal(t, 100, value)
 		wg.Done()
 	}()
 
@@ -87,7 +84,7 @@ func TestParallelAwait(t *testing.T) {
 	go func() {
 		value, err := promise.Await()
 		assert.NoError(t, err)
-		assert.Equal(t, 100, *value)
+		assert.Equal(t, 100, value)
 		wg.Done()
 	}()
 
@@ -95,32 +92,29 @@ func TestParallelAwait(t *testing.T) {
 }
 
 func TestChainedThenWithError(t *testing.T) {
-	failed := New[int](context.Background(), func(ctx context.Context) (*int, error) {
-		return nil, fmt.Errorf("whoops")
+	failed := New[int](context.Background(), func(ctx context.Context) (int, error) {
+		return 0, fmt.Errorf("whoops")
 	})
 
-	value, err := Then[int, int](failed, func(ctx context.Context, value *int, err error) (*int, error) {
+	value, err := Then[int, int](failed, func(ctx context.Context, value int, err error) (int, error) {
 		assert.Equal(t, "whoops", err.Error())
-		ret := 1
-		return &ret, nil
+		return 1, nil
 	}).Await()
 
 	assert.NoError(t, err)
-	assert.Equal(t, 1, *value)
+	assert.Equal(t, 1, value)
 }
 
 func TestCancelPromise(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	promise := New[int](ctx, func(ctx context.Context) (*int, error) {
+	promise := New[int](ctx, func(ctx context.Context) (int, error) {
 		time.Sleep(1 * time.Second)
-		ret := 1
-		return &ret, nil
+		return 1, nil
 	})
 
 	cancel()
-	value, err := promise.Await()
-	assert.Nil(t, value)
+	_, err := promise.Await()
 	assert.Equal(t, "context canceled", err.Error())
 }
 
@@ -129,10 +123,10 @@ func TestContextPropagation(t *testing.T) {
 
 	doneChan := make(chan struct{})
 
-	New[int](ctx, func(ctx context.Context) (*int, error) {
+	New[int](ctx, func(ctx context.Context) (int, error) {
 		<-ctx.Done()
 		doneChan <- struct{}{}
-		return nil, nil
+		return 0, nil
 	})
 
 	cancel()
@@ -149,130 +143,116 @@ func TestContextPropagation(t *testing.T) {
 func TestResolve(t *testing.T) {
 	value, err := Resolve[string]("resolved").Await()
 	assert.NoError(t, err)
-	assert.Equal(t, "resolved", *value)
+	assert.Equal(t, "resolved", value)
 }
 
 func TestResolveThen(t *testing.T) {
-	value, err := Then[int, int](Resolve[int](1), func(ctx context.Context, value *int, err error) (*int, error) {
-		ret := *value + 2
-		return &ret, nil
+	value, err := Then[int, int](Resolve[int](1), func(ctx context.Context, value int, err error) (int, error) {
+		return value + 2, nil
 	}).Await()
 
 	assert.NoError(t, err)
-	assert.Equal(t, 3, *value)
+	assert.Equal(t, 3, value)
 }
 
 func TestReject(t *testing.T) {
-	value, err := Reject[string](fmt.Errorf("whoops")).Await()
-	assert.Nil(t, value)
+	_, err := Reject[string](fmt.Errorf("whoops")).Await()
+	
 	assert.Equal(t, "whoops", err.Error())
 }
 
 func TestAwaitError(t *testing.T) {
-	promise := New[int](context.Background(), func(ctx context.Context) (*int, error) {
+	promise := New[int](context.Background(), func(ctx context.Context) (int, error) {
 		time.Sleep(1 * time.Millisecond)
-		return nil, fmt.Errorf("whoops")
+		return 0, fmt.Errorf("whoops")
 	})
-	value, err := promise.Await()
-	assert.Nil(t, value)
+	_, err := promise.Await()
 	assert.Equal(t, "whoops", err.Error())
 }
 
 func TestThen(t *testing.T) {
-	first := New[int](context.Background(), func(ctx context.Context) (*int, error) {
-		val := 1
-		return &val, nil
+	first := New[int](context.Background(), func(ctx context.Context) (int, error) {
+		return 1, nil
 	})
 
-	second := Then[int, string](first, func(ctx context.Context, value *int, err error) (*string, error) {
-		str := strconv.Itoa(*value)
-		return &str, nil
+	second := Then[int, string](first, func(ctx context.Context, value int, err error) (string, error) {
+		return strconv.Itoa(value), nil
 	})
 
 	secondValue, err := second.Await()
 	assert.NoError(t, err)
-	assert.Equal(t, "1", *secondValue)
+	assert.Equal(t, "1", secondValue)
 
 	firstValue, err := first.Await()
 	assert.NoError(t, err)
-	assert.Equal(t, 1, *firstValue)
+	assert.Equal(t, 1, firstValue)
 }
 
 func TestThenError(t *testing.T) {
-	promise := New[int](context.Background(), func(ctx context.Context) (*int, error) {
+	promise := New[int](context.Background(), func(ctx context.Context) (int, error) {
 		time.Sleep(1 * time.Millisecond)
-		return nil, fmt.Errorf("whoops")
+		return 0, fmt.Errorf("whoops")
 	})
 
-	value, err := Then[int, string](promise, func(ctx context.Context, value *int, err error) (*string, error) {
-		return nil, err
+	_, err := Then[int, string](promise, func(ctx context.Context, value int, err error) (string, error) {
+		return "", err
 	}).Await()
 
-	assert.Nil(t, value)
 	assert.Equal(t, "whoops", err.Error())
 }
 
 func TestAll(t *testing.T) {
-	a := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	a := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(100 * time.Millisecond)
-		ret := "a"
-		return &ret, nil
+		return "a", nil
 	})
 
-	b := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	b := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(1 * time.Millisecond)
-		ret := "b"
-		return &ret, nil
+		return "b", nil
 	})
 
-	c := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	c := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(10 * time.Millisecond)
-		ret := "c"
-		return &ret, nil
+		return "c", nil
 	})
 
 	values, err := All(context.Background(), a, b, c).Await()
 	assert.Nil(t, err)
-	assert.Equal(t, []string{"a", "b", "c"}, *values)
+	assert.Equal(t, []string{"a", "b", "c"}, values)
 }
 
 func TestAllThen(t *testing.T) {
-	a := New[int](context.Background(), func(ctx context.Context) (*int, error) {
-		val := 1
-		return &val, nil
+	a := New[int](context.Background(), func(ctx context.Context) (int, error) {
+		return 1, nil
 	})
 
-	b := New[int](context.Background(), func(ctx context.Context) (*int, error) {
-		val := 2
-		return &val, nil
+	b := New[int](context.Background(), func(ctx context.Context) (int, error) {
+		return 2, nil
 	})
 
-	value, err := Then[[]int, int](All(context.Background(), a, b), func(ctx context.Context, value *[]int, err error) (*int, error) {
-		slice := *value
-		added := slice[0] + slice[1]
-		return &added, nil
+	value, err := Then[[]int, int](All(context.Background(), a, b), func(ctx context.Context, value []int, err error) (int, error) {
+		return value[0] + value[1], nil
 	}).Await()
 
 	assert.Nil(t, err)
-	assert.Equal(t, 3, *value)
+	assert.Equal(t, 3, value)
 }
 
 func TestAllError(t *testing.T) {
-	a := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	a := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(100 * time.Millisecond)
-		return nil, fmt.Errorf("whoops")
+		return "", fmt.Errorf("whoops")
 	})
 
-	b := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	b := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(1 * time.Millisecond)
-		ret := "b"
-		return &ret, nil
+		return "b", nil
 	})
 
-	c := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	c := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(1 * time.Millisecond)
-		ret := "c"
-		return &ret, nil
+		return "c", nil
 	})
 
 	values, err := All(context.Background(), a, b, c).Await()
@@ -281,49 +261,44 @@ func TestAllError(t *testing.T) {
 }
 
 func TestRace(t *testing.T) {
-	winner := New[string](context.Background(), func(ctx context.Context) (*string, error) {
-		ret := "winner"
-		return &ret, nil
+	winner := New[string](context.Background(), func(ctx context.Context) (string, error) {
+		return "winner", nil
 	})
 
-	loser := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	loser := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(time.Second)
-		ret := "loser"
-		return &ret, nil
+		return "loser", nil
 	})
 
 	value, err := Race[string](context.Background(), winner, loser).Await()
 	assert.Nil(t, err)
-	assert.Equal(t, "winner", *value)
+	assert.Equal(t, "winner", value)
 }
 
 func TestRaceError(t *testing.T) {
-	a := New[string](context.Background(), func(ctx context.Context) (*string, error) {
-		return nil, fmt.Errorf("whoops")
+	a := New[string](context.Background(), func(ctx context.Context) (string, error) {
+		return "", fmt.Errorf("whoops")
 	})
 
-	b := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	b := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(time.Millisecond)
-		ret := "b"
-		return &ret, nil
+		return "b", nil
 	})
 
-	value, err := Race[string](context.Background(), a, b).Await()
-	assert.Nil(t, value)
+	_, err := Race[string](context.Background(), a, b).Await()
+	
 	assert.Equal(t, "whoops", err.Error())
 }
 
 func TestRaceCancel(t *testing.T) {
-	a := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	a := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(10 * time.Millisecond)
-		ret := "a"
-		return &ret, nil
+		return "a", nil
 	})
 
-	b := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	b := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(10 * time.Millisecond)
-		ret := "b"
-		return &ret, nil
+		return "b", nil
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -331,47 +306,44 @@ func TestRaceCancel(t *testing.T) {
 
 	cancel()
 
-	value, err := racer.Await()
-	assert.Nil(t, value)
+	_, err := racer.Await()
 	assert.Equal(t, "context canceled", err.Error())
 }
 
 func TestAny(t *testing.T) {
-	a := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	a := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(100 * time.Millisecond)
-		return nil, fmt.Errorf("a failed")
+		return "", fmt.Errorf("a failed")
 	})
 
-	b := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	b := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(10 * time.Millisecond)
-		ret := "b succeeded"
-		return &ret, nil
+		return "b succeeded", nil
 	})
 
-	c := New[string](context.Background(), func(ctx context.Context) (*string, error) {
-		return nil, fmt.Errorf("c failed")
+	c := New[string](context.Background(), func(ctx context.Context) (string, error) {
+		return "", fmt.Errorf("c failed")
 	})
 
 	value, err := Any[string](context.Background(), a, b, c).Await()
 	assert.Nil(t, err)
-	assert.Equal(t, "b succeeded", *value)
+	assert.Equal(t, "b succeeded", value)
 }
 
 func TestAnyError(t *testing.T) {
-	a := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+	a := New[string](context.Background(), func(ctx context.Context) (string, error) {
 		time.Sleep(100 * time.Millisecond)
-		return nil, fmt.Errorf("a failed")
+		return "", fmt.Errorf("a failed")
 	})
 
-	b := New[string](context.Background(), func(ctx context.Context) (*string, error) {
-		return nil, fmt.Errorf("b failed")
+	b := New[string](context.Background(), func(ctx context.Context) (string, error) {
+		return "", fmt.Errorf("b failed")
 	})
 
-	c := New[string](context.Background(), func(ctx context.Context) (*string, error) {
-		return nil, fmt.Errorf("c failed")
+	c := New[string](context.Background(), func(ctx context.Context) (string, error) {
+		return "", fmt.Errorf("c failed")
 	})
 
-	value, err := Any[string](context.Background(), a, b, c).Await()
-	assert.Nil(t, value)
+	_, err := Any[string](context.Background(), a, b, c).Await()
 	assert.Contains(t, err.Error(), "a failed, b failed, c failed")
 }
