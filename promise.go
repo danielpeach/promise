@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -22,9 +23,9 @@ type Promise[T any] struct {
 func New[T any](ctx context.Context, f func(ctx context.Context) (*T, error)) *Promise[T] {
 	ctx, cancel := context.WithCancel(ctx)
 	p := &Promise[T]{
-		mu: &sync.Mutex{},
-		f:  f,
-		ctx: ctx,
+		mu:     &sync.Mutex{},
+		f:      f,
+		ctx:    ctx,
 		cancel: cancel,
 	}
 
@@ -36,10 +37,10 @@ func Resolve[T any](value T) *Promise[T] {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Promise[T]{
 		resolved: true,
-		value: &value,
-		mu: &sync.Mutex{},
-		ctx: ctx,
-		cancel: cancel,
+		value:    &value,
+		mu:       &sync.Mutex{},
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
@@ -48,10 +49,10 @@ func Reject[T any](err error) *Promise[T] {
 	cancel()
 	return &Promise[T]{
 		rejected: true,
-		err: err,
-		mu: &sync.Mutex{},
-		ctx: ctx,
-		cancel: cancel,
+		err:      err,
+		mu:       &sync.Mutex{},
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
@@ -170,7 +171,7 @@ func All[T any](ctx context.Context, promises ...*Promise[T]) *Promise[[]T] {
 				return nil, err
 			case result := <-doneChan:
 				results = append(results, result)
-			case <- ctx.Done():
+			case <-ctx.Done():
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				} else {
@@ -207,7 +208,7 @@ func Race[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 		}()
 
 		for _, promise := range promises {
-			go func (p *Promise[T]) {
+			go func(p *Promise[T]) {
 				value, err := p.Await()
 				if err != nil {
 					errChan <- err
@@ -222,12 +223,85 @@ func Race[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 			return nil, err
 		case result := <-doneChan:
 			return result, nil
-		case <- ctx.Done():
+		case <-ctx.Done():
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			} else {
 				return nil, fmt.Errorf("context canceled")
 			}
+		}
+	})
+}
+
+type AggregateError struct {
+	Errors []error
+}
+
+func (a *AggregateError) Error() string {
+	return fmt.Sprintf("all promises failed: %s", strings.Join(mapWith[error, string](a.Errors, func(err error) string {
+		return err.Error()
+	}), ", "))
+}
+
+type promiseError struct {
+	err   error
+	index int
+}
+
+func Any[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
+	return New(ctx, func(ctx context.Context) (*T, error) {
+		var errs []promiseError
+
+		errChan := make(chan promiseError)
+		doneChan := make(chan *T)
+
+		defer func() {
+			for _, promise := range promises {
+				promise.mu.Lock()
+				if promise.cancel != nil {
+					promise.cancel()
+				}
+				promise.mu.Unlock()
+			}
+		}()
+
+		for index, promise := range promises {
+			go func(i int, p *Promise[T]) {
+				value, err := p.Await()
+				if err != nil {
+					errChan <- promiseError{
+						err:   err,
+						index: i,
+					}
+					return
+				}
+				doneChan <- value
+			}(index, promise)
+		}
+
+		for len(errs) != len(promises) {
+			select {
+			case <-ctx.Done():
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				} else {
+					return nil, fmt.Errorf("context canceled")
+				}
+			case err := <-errChan:
+				errs = append(errs, err)
+			case result := <-doneChan:
+				return result, nil
+			}
+		}
+
+		sort.SliceStable(errs, func(i, j int) bool {
+			return errs[i].index < errs[j].index
+		})
+
+		return nil, &AggregateError{
+			Errors: mapWith[promiseError, error](errs, func(pErr promiseError) error {
+				return pErr.err
+			}),
 		}
 	})
 }

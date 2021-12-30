@@ -94,6 +94,21 @@ func TestParallelAwait(t *testing.T) {
 	wg.Wait()
 }
 
+func TestChainedThenWithError(t *testing.T) {
+	failed := New[int](context.Background(), func(ctx context.Context) (*int, error) {
+		return nil, fmt.Errorf("whoops")
+	})
+
+	value, err := Then[int, int](failed, func(ctx context.Context, value *int, err error) (*int, error) {
+		assert.Equal(t, "whoops", err.Error())
+		ret := 1
+		return &ret, nil
+	}).Await()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, *value)
+}
+
 func TestCancelPromise(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -319,4 +334,44 @@ func TestRaceCancel(t *testing.T) {
 	value, err := racer.Await()
 	assert.Nil(t, value)
 	assert.Equal(t, "context canceled", err.Error())
+}
+
+func TestAny(t *testing.T) {
+	a := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+		time.Sleep(100 * time.Millisecond)
+		return nil, fmt.Errorf("a failed")
+	})
+
+	b := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+		time.Sleep(10 * time.Millisecond)
+		ret := "b succeeded"
+		return &ret, nil
+	})
+
+	c := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+		return nil, fmt.Errorf("c failed")
+	})
+
+	value, err := Any[string](context.Background(), a, b, c).Await()
+	assert.Nil(t, err)
+	assert.Equal(t, "b succeeded", *value)
+}
+
+func TestAnyError(t *testing.T) {
+	a := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+		time.Sleep(100 * time.Millisecond)
+		return nil, fmt.Errorf("a failed")
+	})
+
+	b := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+		return nil, fmt.Errorf("b failed")
+	})
+
+	c := New[string](context.Background(), func(ctx context.Context) (*string, error) {
+		return nil, fmt.Errorf("c failed")
+	})
+
+	value, err := Any[string](context.Background(), a, b, c).Await()
+	assert.Nil(t, value)
+	assert.Contains(t, err.Error(), "a failed, b failed, c failed")
 }
