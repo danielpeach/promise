@@ -9,7 +9,7 @@ import (
 )
 
 // A Promise represents the eventual result of an operation.
-// Retrieve a Promise's value using Await or Map.
+// Retrieve a Promise's value using Await.
 type Promise[T any] struct {
 	f         func(ctx context.Context) (T, error)
 	value     T
@@ -144,25 +144,12 @@ func (p *Promise[T]) Await() (T, error) {
 	}
 }
 
-// Map returns a Promise by converting
-func Map[T, U any](promise *Promise[T], f func(ctx context.Context, value T, err error) (U, error)) *Promise[U] {
-	return New[U](promise.ctx, func(ctx context.Context) (U, error) {
-		value, err := promise.Await()
-		return f(ctx, value, err)
-	})
-}
-
-// Then is an alias for Map.
-func Then[T, U any](promise *Promise[T], f func(ctx context.Context, value T, err error) (U, error)) *Promise[U] {
-	return Map[T, U](promise, f)
-}
-
 type promiseComplete[T any] struct {
 	value T
 	index int
 }
 
-// All returns a Promise that is fulfilled when all of the input promises have been fulfilled. Its
+// All returns a Promise that is resolved when all of the input promises have been resolved. Its
 // value resolves to a slice of the results of the input promises.
 func All[T any](ctx context.Context, promises ...*Promise[T]) *Promise[[]T] {
 	return New(ctx, func(ctx context.Context) ([]T, error) {
@@ -210,22 +197,12 @@ func All[T any](ctx context.Context, promises ...*Promise[T]) *Promise[[]T] {
 	})
 }
 
-// Race returns a Promise that is fulfilled or rejected as soon as one of the
-// input promises is fulfilled or rejected, with the value or rejection reason from that promise.
+// Race returns a Promise that is resolved or rejected as soon as one of the
+// input promises is resolved or rejected, with the value or rejection error from that promise.
 func Race[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 	return New(ctx, func(ctx context.Context) (T, error) {
 		errChan := make(chan error)
 		doneChan := make(chan T)
-
-		defer func() {
-			for _, promise := range promises {
-				promise.mu.Lock()
-				if promise.cancel != nil {
-					promise.cancel()
-				}
-				promise.mu.Unlock()
-			}
-		}()
 
 		for _, promise := range promises {
 			go func(p *Promise[T]) {
@@ -268,8 +245,8 @@ type promiseError struct {
 	index int
 }
 
-// Any returns a Promise that resolves as soon as any of the input promises is fulfilled, with
-// the value of the fulfilled promise. If all of the input promises are rejected, then the
+// Any returns a Promise that resolves as soon as any of the input promises is resolved, with
+// the value of the resolved promise. If all of the input promises are rejected, then the
 // returned promise is rejected with an AggregateError, which aggregates the errors from
 // the input promises.
 func Any[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
@@ -278,16 +255,6 @@ func Any[T any](ctx context.Context, promises ...*Promise[T]) *Promise[T] {
 
 		errChan := make(chan promiseError)
 		doneChan := make(chan T)
-
-		defer func() {
-			for _, promise := range promises {
-				promise.mu.Lock()
-				if promise.cancel != nil {
-					promise.cancel()
-				}
-				promise.mu.Unlock()
-			}
-		}()
 
 		for index, promise := range promises {
 			go func(i int, p *Promise[T]) {

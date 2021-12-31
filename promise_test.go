@@ -3,7 +3,6 @@ package promise
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -104,20 +103,6 @@ func TestParallelAwait(t *testing.T) {
 	wg.Wait()
 }
 
-func TestChainedThenWithError(t *testing.T) {
-	failed := New[int](context.Background(), func(ctx context.Context) (int, error) {
-		return 0, fmt.Errorf("whoops")
-	})
-
-	value, err := Then[int, int](failed, func(ctx context.Context, value int, err error) (int, error) {
-		assert.Equal(t, "whoops", err.Error())
-		return 1, nil
-	}).Await()
-
-	assert.NoError(t, err)
-	assert.Equal(t, 1, value)
-}
-
 func TestCancelPromise(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -159,15 +144,6 @@ func TestResolve(t *testing.T) {
 	assert.Equal(t, "resolved", value)
 }
 
-func TestResolveThen(t *testing.T) {
-	value, err := Then[int, int](Resolve[int](1), func(ctx context.Context, value int, err error) (int, error) {
-		return value + 2, nil
-	}).Await()
-
-	assert.NoError(t, err)
-	assert.Equal(t, 3, value)
-}
-
 func TestReject(t *testing.T) {
 	_, err := Reject[string](fmt.Errorf("whoops")).Await()
 	
@@ -180,37 +156,6 @@ func TestAwaitError(t *testing.T) {
 		return 0, fmt.Errorf("whoops")
 	})
 	_, err := promise.Await()
-	assert.Equal(t, "whoops", err.Error())
-}
-
-func TestThen(t *testing.T) {
-	first := New[int](context.Background(), func(ctx context.Context) (int, error) {
-		return 1, nil
-	})
-
-	second := Then[int, string](first, func(ctx context.Context, value int, err error) (string, error) {
-		return strconv.Itoa(value), nil
-	})
-
-	secondValue, err := second.Await()
-	assert.NoError(t, err)
-	assert.Equal(t, "1", secondValue)
-
-	firstValue, err := first.Await()
-	assert.NoError(t, err)
-	assert.Equal(t, 1, firstValue)
-}
-
-func TestThenError(t *testing.T) {
-	promise := New[int](context.Background(), func(ctx context.Context) (int, error) {
-		time.Sleep(1 * time.Millisecond)
-		return 0, fmt.Errorf("whoops")
-	})
-
-	_, err := Then[int, string](promise, func(ctx context.Context, value int, err error) (string, error) {
-		return "", err
-	}).Await()
-
 	assert.Equal(t, "whoops", err.Error())
 }
 
@@ -233,23 +178,6 @@ func TestAll(t *testing.T) {
 	values, err := All(context.Background(), a, b, c).Await()
 	assert.Nil(t, err)
 	assert.Equal(t, []string{"a", "b", "c"}, values)
-}
-
-func TestAllThen(t *testing.T) {
-	a := New[int](context.Background(), func(ctx context.Context) (int, error) {
-		return 1, nil
-	})
-
-	b := New[int](context.Background(), func(ctx context.Context) (int, error) {
-		return 2, nil
-	})
-
-	value, err := Then[[]int, int](All(context.Background(), a, b), func(ctx context.Context, value []int, err error) (int, error) {
-		return value[0] + value[1], nil
-	}).Await()
-
-	assert.Nil(t, err)
-	assert.Equal(t, 3, value)
 }
 
 func TestAllError(t *testing.T) {
