@@ -3,7 +3,7 @@ Go Promises is inspired by JavaScript's [`Promise` implementation](https://devel
 
 ## Usage
 
-### `New[T any](ctx context.Context, f func(context.Context) (T, error))`
+#### `New[T any](ctx context.Context, f func(context.Context) (T, error))`
 
 `New` returns a new `Promise`. Function `f` will be executed immediately. `New` 
 does not block on `f`'s completion.
@@ -16,7 +16,7 @@ A `Promise` can be `pending`, `rejected`, or `resolved`:
 If the `ctx` passed to `New` is canceled, then the `Promise` will be rejected immediately. The `ctx` passed
 to `f` will also be cancelled; `f` should pass `ctx` to subroutines and check if `ctx` has been cancelled, if applicable.
 
-### `Promise[T any].Await() (T, error)`
+#### `Promise[T any].Await() (T, error)`
 
 `Await` blocks on the completion of a `Promise` and returns the resolved value of type `T` or rejection error.
 
@@ -45,7 +45,7 @@ if err != nil {
 // Do something (e.g., fight!).
 ```
 
-### `All[T any](ctx context.Context, promise... *Promise[T]) *Promise[[]T]`
+#### `All[T any](ctx context.Context, promise... *Promise[T]) *Promise[[]T]`
 
 `All` returns a `Promise` that resolves when all of the input promises have been resolved. Its 
 value resolves to a slice of the results of the input promises.
@@ -64,7 +64,7 @@ hats, err := promise.All[hat](
 	}),
 ).Await()
 if err != nil { 
-	// Handle hat error (e.g., hat only nine-gallons!)
+	// Handle hat error (e.g., hat is only nine-gallons!)
 }
 for _, hat := range hats {
 	// Put on hat.
@@ -72,7 +72,7 @@ for _, hat := range hats {
 
 ```
 
-### `Race(ctx context.Context, promise... *Promise[T]) *Promise[T]`
+#### `Race[T any](ctx context.Context, promise... *Promise[T]) *Promise[T]`
 
 `Race` returns a `Promise` that is resolved or rejected as soon as one of the
 input promises is resolved or rejected, with the value or rejection error from that promise.
@@ -93,7 +93,7 @@ if err != nil {
 // Congratulate tortoise.
 ```
 
-### `Any(ctx context.Context, promise... *Promise[T]) *Promise[T]`
+#### `Any[T any](ctx context.Context, promise... *Promise[T]) *Promise[T]`
 
 `Any` returns a `Promise` that resolves as soon as any of the input promises is resolved, with
 the value of the resolved promise. If all of the input promises are rejected, then the
@@ -102,16 +102,16 @@ the input promises.
 
 ```go
 survivor, err := promise.Any[catFighter](
-    ctx,
-    promise.New[catFighter](ctx, func(ctx context.Context) (catFighter, error) {
-        // Fight lion.
-    }),
-    promise.New[catFighter](ctx, func(ctx context.Context) (catFighter, error) {
-        // Fight snow leopard.
-    }),
-    promise.New[catFighter](ctx, func(ctx context.Context) (catFighter, error) {
-        // Fight jaguar. 
-    }),
+	ctx, 
+	promise.New[catFighter](ctx, func(ctx context.Context) (catFighter, error) { 
+		// Fight lion. 
+	}), 
+	promise.New[catFighter](ctx, func(ctx context.Context) (catFighter, error) { 
+		// Fight snow leopard. 
+	}), 
+	promise.New[catFighter](ctx, func(ctx context.Context) (catFighter, error) { 
+		// Fight jaguar. 
+	}),
 ).Await()
 if err != nil { 
 	// Handle error (e.g., all cats are victors).
